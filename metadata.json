@@ -1,0 +1,6 @@
+{
+  "name": "DHD Analytics - Algerian COD E-Commerce Tracker",
+  "description": "Real-time tracking and delivery analytics dashboard for Algerian Cash-on-Delivery (COD) e-commerce, integrated with DHD Delivery (Ecotrack) and Gemini AI product grouping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
