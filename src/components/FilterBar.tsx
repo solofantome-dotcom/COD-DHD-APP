@@ -44,6 +44,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   const [customEnd, setCustomEnd] = useState(dateRange.endDate);
 
   const presets: { id: DatePresetKey; label: string }[] = [
+    { id: 'ALL', label: "Tout l'historique" },
     { id: 'TODAY', label: "Aujourd'hui" },
     { id: 'YESTERDAY', label: 'Hier' },
     { id: 'LAST_WEEK', label: 'Semaine Passée' },
@@ -69,13 +70,13 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   };
 
   const hasActiveFilters =
-    dateRange.preset !== 'THIS_MONTH' ||
+    dateRange.preset !== 'ALL' ||
     selectedWilaya !== 'all' ||
     selectedStatus !== 'all' ||
     searchQuery.trim() !== '';
 
   const handleResetFilters = () => {
-    onSelectDatePreset('THIS_MONTH');
+    onSelectDatePreset('ALL');
     setShowCustomDates(false);
     onSelectWilaya('all');
     onSelectStatus('all');

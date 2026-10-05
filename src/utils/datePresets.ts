@@ -1,4 +1,4 @@
-export type DatePresetKey = 'TODAY' | 'YESTERDAY' | 'LAST_WEEK' | 'THIS_MONTH' | 'CUSTOM';
+export type DatePresetKey = 'ALL' | 'TODAY' | 'YESTERDAY' | 'LAST_WEEK' | 'THIS_MONTH' | 'CUSTOM';
 
 export interface DateRange {
   preset: DatePresetKey;
@@ -17,6 +17,10 @@ export function getDateRangeForPreset(preset: DatePresetKey): { startDate: strin
   const now = new Date();
 
   switch (preset) {
+    case 'ALL': {
+      // Full account order history
+      return { startDate: '', endDate: '' };
+    }
     case 'TODAY': {
       const todayStr = formatDate(now);
       return { startDate: todayStr, endDate: todayStr };
@@ -44,10 +48,10 @@ export function getDateRangeForPreset(preset: DatePresetKey): { startDate: strin
     }
     case 'CUSTOM':
     default: {
-      const thirtyDaysAgo = new Date(now);
-      thirtyDaysAgo.setDate(now.getDate() - 30);
+      const ninetyDaysAgo = new Date(now);
+      ninetyDaysAgo.setDate(now.getDate() - 90);
       return {
-        startDate: formatDate(thirtyDaysAgo),
+        startDate: formatDate(ninetyDaysAgo),
         endDate: formatDate(now),
       };
     }

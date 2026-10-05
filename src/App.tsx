@@ -38,7 +38,7 @@ export default function App() {
 
   // Date and filter state
   const [dateRange, setDateRange] = useState<DateRange>(() => {
-    const preset: DatePresetKey = 'THIS_MONTH';
+    const preset: DatePresetKey = 'ALL';
     const dates = getDateRangeForPreset(preset);
     return { preset, ...dates };
   });
@@ -100,13 +100,18 @@ export default function App() {
   }, []);
 
   // Fetch orders from backend
-  const fetchOrders = async () => {
+  const fetchOrders = async (forceRefresh: boolean = false) => {
     setIsLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (dateRange.startDate) params.append('startDate', dateRange.startDate);
-      if (dateRange.endDate) params.append('endDate', dateRange.endDate);
+      if (forceRefresh) params.append('forceRefresh', 'true');
+      if (dateRange.preset === 'ALL') {
+        params.append('allTime', 'true');
+      } else {
+        if (dateRange.startDate) params.append('startDate', dateRange.startDate);
+        if (dateRange.endDate) params.append('endDate', dateRange.endDate);
+      }
       if (selectedWilaya && selectedWilaya !== 'all') params.append('wilayaId', selectedWilaya);
       if (selectedStatus && selectedStatus !== 'all') params.append('status', selectedStatus);
       if (searchQuery.trim()) params.append('search', searchQuery.trim());
@@ -335,7 +340,7 @@ export default function App() {
         isLive={isLive}
         hasApiKey={hasApiKey}
         isLoading={isLoading}
-        onRefresh={fetchOrders}
+        onRefresh={() => fetchOrders(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onTriggerAiGrouping={() => triggerGeminiProductGrouping()}
         isAiProcessing={isAiProcessing}
