@@ -455,45 +455,68 @@ export default function App() {
           </button>
         </div>
 
-        {/* Tab 1: Overview Dashboard with KPIs, Charts, and Top Products */}
-        {activeTab === 'overview' && (
-          <div className="space-y-6 animate-in fade-in">
-            {/* Custom E-commerce KPI Cards */}
-            <KpiCards kpis={kpis} />
-
-            {/* Distribution Charts (Pie/Donut & Wilaya Top 5) */}
-            <StatusCharts kpis={kpis} orders={filteredOrders} />
-
-            {/* AI-Standardized Products Breakdown preview */}
-            <StandardizedProductsTable
-              groups={standardizedProductGroups}
-              onTriggerAi={() => triggerGeminiProductGrouping()}
-              isAiProcessing={isAiProcessing}
-              totalRawProductsCount={orders.length}
-            />
+        {/* Loading state indicator on first full sync */}
+        {isLoading && orders.length === 0 ? (
+          <div className="py-20 flex flex-col items-center justify-center text-center space-y-4 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 shadow-xs">
+            <div className="relative flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-500/10 text-emerald-500 border border-emerald-500/30">
+              <Truck className="w-8 h-8 animate-bounce" />
+              <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </span>
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                Synchronisation DHD Express en cours...
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm">
+                Téléchargement et analyse de l'ensemble de votre historique de colis (350+ commandes) depuis la plateforme DHD.
+              </p>
+            </div>
           </div>
-        )}
+        ) : (
+          <>
+            {/* Tab 1: Overview Dashboard with KPIs, Charts, and Top Products */}
+            {activeTab === 'overview' && (
+              <div className="space-y-6 animate-in fade-in">
+                {/* Custom E-commerce KPI Cards */}
+                <KpiCards kpis={kpis} />
 
-        {/* Tab 2: Standardized Products Focused Table */}
-        {activeTab === 'products' && (
-          <div className="space-y-4 animate-in fade-in">
-            <StandardizedProductsTable
-              groups={standardizedProductGroups}
-              onTriggerAi={() => triggerGeminiProductGrouping()}
-              isAiProcessing={isAiProcessing}
-              totalRawProductsCount={orders.length}
-            />
-          </div>
-        )}
+                {/* Distribution Charts (Pie/Donut & Wilaya Top 5) */}
+                <StatusCharts kpis={kpis} orders={filteredOrders} />
 
-        {/* Tab 3: Detailed Orders Table */}
-        {activeTab === 'orders' && (
-          <div className="space-y-4 animate-in fade-in">
-            <OrdersDataTable
-              orders={filteredOrders}
-              totalOrdersCount={orders.length}
-            />
-          </div>
+                {/* AI-Standardized Products Breakdown preview */}
+                <StandardizedProductsTable
+                  groups={standardizedProductGroups}
+                  onTriggerAi={() => triggerGeminiProductGrouping()}
+                  isAiProcessing={isAiProcessing}
+                  totalRawProductsCount={orders.length}
+                />
+              </div>
+            )}
+
+            {/* Tab 2: Standardized Products Focused Table */}
+            {activeTab === 'products' && (
+              <div className="space-y-4 animate-in fade-in">
+                <StandardizedProductsTable
+                  groups={standardizedProductGroups}
+                  onTriggerAi={() => triggerGeminiProductGrouping()}
+                  isAiProcessing={isAiProcessing}
+                  totalRawProductsCount={orders.length}
+                />
+              </div>
+            )}
+
+            {/* Tab 3: Detailed Orders Table */}
+            {activeTab === 'orders' && (
+              <div className="space-y-4 animate-in fade-in">
+                <OrdersDataTable
+                  orders={filteredOrders}
+                  totalOrdersCount={orders.length}
+                />
+              </div>
+            )}
+          </>
         )}
       </main>
 

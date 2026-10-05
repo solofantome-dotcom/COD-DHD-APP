@@ -11,14 +11,13 @@ export const serverApp = express();
 serverApp.use(express.json());
 
 // Live DHD / Ecotrack API configuration
-// Integrated with the company's live platform credentials
 const DEFAULT_DHD_TOKEN = 'LZZy5WZqspOY8jSHPSbotPdKsHa4X8KhlyIMZe0HYMtxrrXKYd44Z8YKDTjc';
 const DEFAULT_DHD_URL = 'https://platform.dhd-dz.com/api/v1';
 
 let dhdConfig = {
   apiKey: process.env.DHD_API_KEY || DEFAULT_DHD_TOKEN,
   apiUrl: process.env.DHD_API_URL || DEFAULT_DHD_URL,
-  forceMock: false, // Default to LIVE connection with the user's active API token!
+  forceMock: false,
 };
 
 // Gemini AI client initialization
@@ -37,8 +36,11 @@ const productStandardizationCache: Record<string, string> = {
   'Skechers Gaxing  - Blanc / 41': 'Skechers Gaxing Blanc',
   'CASAB Bluegris/ L': 'Ensemble Casablanca Bluegris',
   'CASAB Bluegris /L': 'Ensemble Casablanca Bluegris',
+  'CASAB Bluegris/ XL': 'Ensemble Casablanca Bluegris',
   'SUMME bleu noir/ 2XL': 'Ensemble Summer Bleu Noir',
   'SUMME Blanc/ XL': 'Ensemble Summer Blanc',
+  "LV'MO Black/ XL": 'Ensemble Louis Vuitton Black',
+  "LV'MODELE 2026  - Noir / XL": 'Ensemble Louis Vuitton 2026 Noir',
   'survet noir XL': 'Survêtement Noir',
   'Survetement Black - XL': 'Survêtement Noir',
   'Survet noir taille L': 'Survêtement Noir',
@@ -116,9 +118,92 @@ function normalizeDhdStatus(rawStatus: string, globalStatus?: string): { status:
   return { status: 'en_attente', label: 'En attente' };
 }
 
-// In-memory cache for live DHD orders to make dashboard lightning fast
+// In-memory cache for live DHD orders (cached for 5 minutes)
 let cachedOrdersData: { orders: DHDOrder[]; timestamp: number } | null = null;
-const CACHE_TTL_MS = 60 * 1000; // 60 seconds cache
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Helper to normalize DHD API base URL (always ensures /api/v1 is present)
+function getNormalizedApiUrl(baseUrl: string): string {
+  let url = (baseUrl || DEFAULT_DHD_URL).trim().replace(/\/$/, '');
+  if (!url.includes('/api/v1')) {
+    url = `${url}/api/v1`;
+  }
+  return url;
+}
+
+// Helper to fetch an individual page from DHD Ecotrack
+async function fetchDhdPage(apiUrl: string, apiKey: string, page: number, startDate?: string, endDate?: string) {
+  const params = new URLSearchParams();
+  params.append('page', String(page));
+
+  // CRITICAL: DHD / Ecotrack only returns all historical orders when start_date is set!
+  // If no start_date is passed, DHD truncates results to 28 active orders.
+  const effectiveStartDate = startDate || '2020-01-01';
+  params.append('start_date', effectiveStartDate);
+
+  if (endDate) {
+    params.append('end_date', endDate);
+  }
+
+  const cleanBase = getNormalizedApiUrl(apiUrl);
+  const fetchUrl = `${cleanBase}/get/orders?${params.toString()}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+  const apiResponse = await fetch(fetchUrl, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    },
+    signal: controller.signal,
+  });
+
+  clearTimeout(timeoutId);
+
+  if (!apiResponse.ok) {
+    throw new Error(`DHD API page ${page} error (${apiResponse.status}): ${apiResponse.statusText}`);
+  }
+
+  return await apiResponse.json();
+}
+
+// Parse raw DHD order item into standardized DHDOrder
+function parseDhdOrderItem(item: any): DHDOrder {
+  const statusInfo = normalizeDhdStatus(item.status || '', item.global_status || '');
+  const wId = Number(item.wilaya_id || item.wilaya_code || 16);
+  const wilayaObj = ALGERIA_WILAYAS.find((w) => w.id === wId);
+  const wilayaName = wilayaObj ? wilayaObj.name : item.wilaya || `Wilaya ${wId}`;
+
+  let lastNote = item.note || item.last_note || '';
+  if (!lastNote && Array.isArray(item.status_reason) && item.status_reason.length > 0) {
+    const latestReason = item.status_reason[item.status_reason.length - 1];
+    lastNote = [latestReason.remarque, latestReason.station, latestReason.livreur].filter(Boolean).join(' • ');
+  }
+
+  return {
+    id: String(item.tracking || item.id || Math.random()),
+    tracking: String(item.tracking || item.code_suivi || `DHD-${item.id}`),
+    reference: String(item.reference || `#${item.id}`),
+    customer_name: String(item.client || item.customer_name || 'Client'),
+    customer_phone: String(item.phone || item.telephone || ''),
+    wilaya_id: wId,
+    wilaya_name: wilayaName,
+    commune: String(item.adresse || item.commune || ''),
+    address: String(item.adresse || ''),
+    product_raw: String(item.products || item.produit || item.product || 'Produit'),
+    price: Number(item.montant || item.price || 0),
+    shipping_cost: Number(item.tarif_prestation || item.shipping_fee || 500),
+    status: statusInfo.status,
+    status_label: statusInfo.label,
+    created_at: item.created_at || new Date().toISOString(),
+    updated_at: item.last_updated_at || item.created_at || new Date().toISOString(),
+    delivery_attempts: Number(Array.isArray(item.status_reason) ? item.status_reason.length : 1),
+    last_note: lastNote,
+  };
+}
 
 // -------------------------------------------------------------
 // 1. DHD / Ecotrack API Integration & Data Fetching Route
@@ -151,95 +236,63 @@ serverApp.get('/api/dhd/orders', async (req: Request, res: Response) => {
     } else if (dhdConfig.apiKey && !dhdConfig.forceMock) {
       try {
         isLiveFetch = true;
-        let page = 1;
-        let hasMorePages = true;
-        const maxPagesToFetch = 10;
-        const fetchedList: DHDOrder[] = [];
 
-        while (hasMorePages && page <= maxPagesToFetch) {
-          const fetchUrl = `${dhdConfig.apiUrl.replace(/\/$/, '')}/get/orders?page=${page}`;
+        // 1. Fetch Page 1 first to determine total items and total pages
+        const page1Data = await fetchDhdPage(
+          dhdConfig.apiUrl,
+          dhdConfig.apiKey,
+          1,
+          allTime === 'true' ? '2020-01-01' : startDate,
+          allTime === 'true' ? undefined : endDate
+        );
 
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 14000);
+        const totalPages = Math.min(Number(page1Data.last_page || 1), 30);
+        let rawItems: any[] = [];
 
-          const apiResponse = await fetch(fetchUrl, {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${dhdConfig.apiKey}`,
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-            },
-            signal: controller.signal,
-          });
+        if (Array.isArray(page1Data?.data)) {
+          rawItems = rawItems.concat(page1Data.data);
+        } else if (Array.isArray(page1Data)) {
+          rawItems = rawItems.concat(page1Data);
+        }
 
-          clearTimeout(timeoutId);
-
-          if (!apiResponse.ok) {
-            throw new Error(`DHD API responded with status ${apiResponse.status}: ${apiResponse.statusText}`);
+        // 2. Fetch remaining pages (e.g. pages 2 to 9) concurrently
+        if (totalPages > 1) {
+          const remainingPages: number[] = [];
+          for (let p = 2; p <= totalPages; p++) {
+            remainingPages.push(p);
           }
 
-          const responseData = await apiResponse.json();
-          const items: any[] = Array.isArray(responseData)
-            ? responseData
-            : Array.isArray(responseData?.data)
-              ? responseData.data
-              : Array.isArray(responseData?.orders)
-                ? responseData.orders
-                : [];
+          const pageResults = await Promise.allSettled(
+            remainingPages.map((p) =>
+              fetchDhdPage(
+                dhdConfig.apiUrl,
+                dhdConfig.apiKey,
+                p,
+                allTime === 'true' ? '2020-01-01' : startDate,
+                allTime === 'true' ? undefined : endDate
+              )
+            )
+          );
 
-          if (items.length === 0) {
-            hasMorePages = false;
-            break;
-          }
-
-          // Parse and normalize orders
-          for (const item of items) {
-            const statusInfo = normalizeDhdStatus(item.status || '', item.global_status || '');
-            const wId = Number(item.wilaya_id || item.wilaya_code || 16);
-            const wilayaObj = ALGERIA_WILAYAS.find((w) => w.id === wId);
-            const wilayaName = wilayaObj ? wilayaObj.name : item.wilaya || `Wilaya ${wId}`;
-
-            // Extract last remark from status_reason array if available
-            let lastNote = item.note || item.last_note || '';
-            if (!lastNote && Array.isArray(item.status_reason) && item.status_reason.length > 0) {
-              const latestReason = item.status_reason[item.status_reason.length - 1];
-              lastNote = [latestReason.remarque, latestReason.station].filter(Boolean).join(' • ');
+          for (const res of pageResults) {
+            if (res.status === 'fulfilled') {
+              const pData = res.value;
+              if (Array.isArray(pData?.data)) {
+                rawItems = rawItems.concat(pData.data);
+              } else if (Array.isArray(pData)) {
+                rawItems = rawItems.concat(pData);
+              }
             }
-
-            fetchedList.push({
-              id: String(item.tracking || item.id || Math.random()),
-              tracking: String(item.tracking || item.code_suivi || `DHD-${item.id}`),
-              reference: String(item.reference || `#${item.id}`),
-              customer_name: String(item.client || item.customer_name || 'Client'),
-              customer_phone: String(item.phone || item.telephone || ''),
-              wilaya_id: wId,
-              wilaya_name: wilayaName,
-              commune: String(item.adresse || item.commune || ''),
-              address: String(item.adresse || ''),
-              product_raw: String(item.products || item.produit || item.product || 'Produit'),
-              price: Number(item.montant || item.price || 0),
-              shipping_cost: Number(item.tarif_prestation || item.shipping_fee || 500),
-              status: statusInfo.status,
-              status_label: statusInfo.label,
-              created_at: item.created_at || new Date().toISOString(),
-              updated_at: item.last_updated_at || item.created_at || new Date().toISOString(),
-              delivery_attempts: Number(Array.isArray(item.status_reason) ? item.status_reason.length : 1),
-              last_note: lastNote,
-            });
-          }
-
-          const lastPage = Number(responseData.last_page || 1);
-          if (page >= lastPage || items.length < 20) {
-            hasMorePages = false;
-          } else {
-            page++;
           }
         }
 
-        allOrders = fetchedList;
-        cachedOrdersData = { orders: fetchedList, timestamp: Date.now() };
+        // Parse all fetched items into clean DHDOrder objects
+        const parsedOrders = rawItems.map(parseDhdOrderItem);
+
+        allOrders = parsedOrders;
+        cachedOrdersData = { orders: parsedOrders, timestamp: Date.now() };
       } catch (err: any) {
-        console.error('Error fetching from live DHD API:', err.message);
+        console.error('Error fetching all pages from live DHD API:', err.message);
         liveError = err.message;
         if (cachedOrdersData) {
           allOrders = [...cachedOrdersData.orders];
@@ -253,9 +306,9 @@ serverApp.get('/api/dhd/orders', async (req: Request, res: Response) => {
       allOrders = generateRealisticMockOrders();
     }
 
-    // Apply date range filtering only if not requesting allTime and parameters are provided
+    // Apply date range filtering on created_at if specific dates were requested
     if (allTime !== 'true' && (startDate || endDate)) {
-      const filteredByDate = allOrders.filter((order) => {
+      allOrders = allOrders.filter((order) => {
         const orderTime = new Date(order.created_at).getTime();
         if (startDate) {
           const sTime = new Date(startDate).setHours(0, 0, 0, 0);
@@ -267,12 +320,6 @@ serverApp.get('/api/dhd/orders', async (req: Request, res: Response) => {
         }
         return true;
       });
-
-      // If the selected date range had no orders (e.g. today has 0, but account has orders),
-      // we only filter if it matched, or allow the frontend to request allTime
-      if (filteredByDate.length > 0 || allOrders.length === 0) {
-        allOrders = filteredByDate;
-      }
     }
 
     // Filter by Wilaya
@@ -341,6 +388,9 @@ serverApp.post('/api/dhd/config', (req: Request, res: Response) => {
   if (typeof apiUrl === 'string' && apiUrl.trim()) dhdConfig.apiUrl = apiUrl.trim();
   if (typeof forceMock === 'boolean') dhdConfig.forceMock = forceMock;
 
+  // Invalidate cache on config change
+  cachedOrdersData = null;
+
   return res.json({
     success: true,
     message: 'Configuration DHD mise à jour avec succès.',
@@ -365,9 +415,9 @@ serverApp.post('/api/dhd/test-connection', async (req: Request, res: Response) =
   }
 
   try {
-    const testUrl = `${urlToTest.replace(/\/$/, '')}/get/orders?page=1`;
+    const testUrl = `${getNormalizedApiUrl(urlToTest)}/get/orders?start_date=2020-01-01&page=1`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     const response = await fetch(testUrl, {
       method: 'GET',
@@ -382,10 +432,10 @@ serverApp.post('/api/dhd/test-connection', async (req: Request, res: Response) =
 
     if (response.ok) {
       const data = await response.json();
-      const count = Array.isArray(data?.data) ? data.data.length : Array.isArray(data) ? data.length : 0;
+      const total = data?.total || (Array.isArray(data?.data) ? data.data.length : 0);
       return res.json({
         success: true,
-        message: `Connexion réussie avec l'API DHD ! (${count} colis détectés)`,
+        message: `Connexion réussie avec l'API DHD ! (${total} colis trouvés dans votre compte)`,
       });
     } else {
       return res.status(response.status).json({
